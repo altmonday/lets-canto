@@ -89,22 +89,29 @@ export async function generateLesson(ctx: LessonContext): Promise<{ lesson: Gene
   const prompt = lessonPrompt(ctx);
   const effort = (process.env.LESSON_EFFORT as "low" | "medium" | "high" | undefined) ?? "medium";
 
-  const first = await generateStructured({ schema: GeneratedLesson, system: LESSON_SYSTEM, prompt, effort });
+  // Lesson requests run in a 300-second function: leave room for the database work
+  // and only attempt a repair round if there's enough time left for it.
+  const started = Date.now();
+  const first = await generateStructured({ schema: GeneratedLesson, system: LESSON_SYSTEM, prompt, effort, timeoutMs: 170_000 });
   let report = checkLesson(first.data, known);
   if (report.issues.length === 0) return { lesson: first.data, model: first.model, issues: [] };
 
-  try {
-    const second = await generateStructured({
-      schema: GeneratedLesson,
-      system: LESSON_SYSTEM,
-      prompt: `${prompt}\n\n# Repair\n${LESSON_REPAIR_NOTE}\n\nIssues:\n${report.issues.map((i) => `- ${i}`).join("\n")}\n\nDraft:\n${JSON.stringify(first.data)}`,
-      effort,
-    });
-    const secondReport = checkLesson(second.data, known);
-    if (secondReport.repaired) return { lesson: secondReport.repaired, model: second.model, issues: secondReport.issues };
-    report = secondReport;
-  } catch {
-    // Fall through to the first draft's repaired version, if usable.
+  const remaining = 250_000 - (Date.now() - started);
+  if (remaining > 90_000) {
+    try {
+      const second = await generateStructured({
+        schema: GeneratedLesson,
+        system: LESSON_SYSTEM,
+        prompt: `${prompt}\n\n# Repair\n${LESSON_REPAIR_NOTE}\n\nIssues:\n${report.issues.map((i) => `- ${i}`).join("\n")}\n\nDraft:\n${JSON.stringify(first.data)}`,
+        effort,
+        timeoutMs: remaining,
+      });
+      const secondReport = checkLesson(second.data, known);
+      if (secondReport.repaired) return { lesson: secondReport.repaired, model: second.model, issues: secondReport.issues };
+      report = secondReport;
+    } catch {
+      // Fall through to the first draft's repaired version, if usable.
+    }
   }
   if (report.repaired) return { lesson: report.repaired, model: first.model, issues: report.issues };
   throw new AiGenerationError(`Lesson failed quality checks: ${report.issues.slice(0, 5).join("; ")}`, "invalid_output");
@@ -138,7 +145,7 @@ export async function generateRoadmap(input: {
     .filter(Boolean)
     .join("\n\n");
 
-  const result = await generateStructured({ schema: GeneratedRoadmap, system: ROADMAP_SYSTEM, prompt, effort: "medium", maxTokens: 16000 });
+  const result = await generateStructured({ schema: GeneratedRoadmap, system: ROADMAP_SYSTEM, prompt, effort: "low", maxTokens: 12000, timeoutMs: 60_000 });
   const roadmap = result.data;
   roadmap.start_month = Math.max(1, Math.min(4, Math.round(roadmap.start_month)));
   if (roadmap.months.length !== 12) throw new AiGenerationError("Roadmap must have 12 months", "invalid_output");
@@ -158,7 +165,7 @@ export async function generateSpeakingFeedback(input: {
     `Learner level: ${input.learnerLevel}/100 (${levelDescription(input.learnerLevel)})`,
     `Learner's attempt (typed): ${input.attempt}`,
   ].join("\n");
-  const result = await generateStructured({ schema: SpeakingFeedback, system: FEEDBACK_SYSTEM, prompt, effort: "low", maxTokens: 8000 });
+  const result = await generateStructured({ schema: SpeakingFeedback, system: FEEDBACK_SYSTEM, prompt, effort: "low", maxTokens: 8000, timeoutMs: 60_000 });
   const fb = result.data;
   // Drop any suggestion whose Jyutping doesn't line up with its characters.
   fb.corrections = fb.corrections.map((c) =>
@@ -179,7 +186,7 @@ export async function generateFamilyStory(input: {
     `Adult reader's level: ${input.learnerLevel}/100 (${levelDescription(input.learnerLevel)})`,
     `Recent family vocabulary to reuse where natural: ${input.vocabulary.join("、") || "none"}`,
   ].join("\n");
-  const result = await generateStructured({ schema: FamilyStory, system: STORY_SYSTEM, prompt, effort: "medium", maxTokens: 16000 });
+  const result = await generateStructured({ schema: FamilyStory, system: STORY_SYSTEM, prompt, effort: "medium", maxTokens: 16000, timeoutMs: 150_000 });
   const story = result.data;
   story.pages = story.pages.filter((p) => checkAlignment(p.line.zh, p.line.jyutping).ok);
   story.questions_to_ask = story.questions_to_ask.filter((q) => checkAlignment(q.zh, q.jyutping).ok);

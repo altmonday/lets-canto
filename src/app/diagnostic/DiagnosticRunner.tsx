@@ -46,23 +46,31 @@ export function DiagnosticRunner({ self, name, retake }: { self: SelfAssessment;
 
   const submit = async () => {
     setStage("submitting");
-    const res = await fetch("/api/diagnostic", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        responses: responses.map((r) => ({ itemId: r.itemId, choice: r.choice })),
-        audioAvailable: audioOk,
-        speakingRating,
-      }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error ?? "Couldn't save your results.");
+    try {
+      const res = await fetch("/api/diagnostic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          responses: responses.map((r) => ({ itemId: r.itemId, choice: r.choice })),
+          audioAvailable: audioOk,
+          speakingRating,
+        }),
+        // Never wait forever: the server gives up well before this.
+        signal: AbortSignal.timeout(180_000),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "Couldn't save your results.");
+        setStage("error");
+        return;
+      }
+      router.replace("/");
+      router.refresh();
+    } catch {
+      // The connection dropped (e.g. the phone slept). The results may well have been saved.
+      setError("We lost the connection while building your plan. It may have finished anyway — check your dashboard first.");
       setStage("error");
-      return;
     }
-    router.replace("/");
-    router.refresh();
   };
 
   if (stage === "intro") {
@@ -206,7 +214,7 @@ export function DiagnosticRunner({ self, name, retake }: { self: SelfAssessment;
           ✳
         </div>
         <h2 className="text-xl font-extrabold">Building your 12-month pathway…</h2>
-        <p className="text-muted">We&apos;re personalising your plan from your answers. This can take up to a minute.</p>
+        <p className="text-muted">We&apos;re personalising your plan from your answers. This can take up to a minute — please keep this screen open.</p>
       </Card>
     );
   }
@@ -214,7 +222,14 @@ export function DiagnosticRunner({ self, name, retake }: { self: SelfAssessment;
   return (
     <Card className="space-y-3">
       <p className="text-rose">{error}</p>
-      <Button onClick={submit}>Try again</Button>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="dark" onClick={() => (router.replace("/"), router.refresh())}>
+          Go to my dashboard
+        </Button>
+        <Button variant="secondary" onClick={submit}>
+          Try again
+        </Button>
+      </div>
     </Card>
   );
 }
