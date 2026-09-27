@@ -20,14 +20,14 @@ let client: Anthropic | null = null;
 function getClient(): Anthropic {
   // Organization-level keys (not scoped to a workspace) must name the workspace on every request.
   const workspace = process.env.ANTHROPIC_WORKSPACE_ID;
-  client ??= new Anthropic({ maxRetries: 2, ...(workspace ? { defaultHeaders: { "anthropic-workspace-id": workspace } } : {}) });
+  client ??= new Anthropic({ maxRetries: 1, ...(workspace ? { defaultHeaders: { "anthropic-workspace-id": workspace } } : {}) });
   return client;
 }
 
 export class AiGenerationError extends Error {
   constructor(
     message: string,
-    readonly reason: "refusal" | "truncated" | "invalid_output" | "api_error" | "not_configured",
+    readonly reason: "refusal" | "truncated" | "invalid_output" | "api_error" | "not_configured" | "timeout",
   ) {
     super(message);
   }
@@ -66,21 +66,27 @@ export async function generateStructured<S extends z.ZodType>(opts: {
   prompt: string;
   effort?: Effort;
   maxTokens?: number;
+  /** Give up after this long so the calling request finishes within the hosting time limit. */
+  timeoutMs: number;
 }): Promise<StructuredResult<z.infer<S>>> {
   if (!aiConfigured()) throw new AiGenerationError("ANTHROPIC_API_KEY is not set", "not_configured");
+  const deadline = Date.now() + opts.timeoutMs;
 
   const request = (withFallbacks: boolean) =>
     getClient()
-      .beta.messages.stream({
-        model: MODEL,
-        max_tokens: opts.maxTokens ?? 32000,
-        ...(withFallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-        thinking: { type: "adaptive" },
-        output_config: { effort: opts.effort ?? "medium", format: betaZodOutputFormat(opts.schema) },
-        // Stable instructions first so repeated requests hit the prompt cache.
-        system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: opts.prompt }],
-      })
+      .beta.messages.stream(
+        {
+          model: MODEL,
+          max_tokens: opts.maxTokens ?? 32000,
+          ...(withFallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+          thinking: { type: "adaptive" },
+          output_config: { effort: opts.effort ?? "medium", format: betaZodOutputFormat(opts.schema) },
+          // Stable instructions first so repeated requests hit the prompt cache.
+          system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
+          messages: [{ role: "user", content: opts.prompt }],
+        },
+        { signal: AbortSignal.timeout(Math.max(1000, deadline - Date.now())) },
+      )
       .finalMessage();
 
   const useFallbacks = process.env.ANTHROPIC_DISABLE_FALLBACKS !== "1";
@@ -95,6 +101,7 @@ export async function generateStructured<S extends z.ZodType>(opts: {
     }
   } catch (error) {
     console.error("Claude request failed:", error);
+    if (Date.now() >= deadline) throw new AiGenerationError("Claude took too long to respond", "timeout");
     const reason = error instanceof Anthropic.APIError ? "api_error" : "invalid_output";
     throw new AiGenerationError(describeAiError(error), reason);
   }
