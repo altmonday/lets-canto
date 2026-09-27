@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { authed } from "@/lib/api/handler";
-import { aiConfigured } from "@/lib/ai/claude";
+import { AiGenerationError, aiConfigured } from "@/lib/ai/claude";
 import { generateFamilyStory } from "@/lib/ai/generators";
 import { targetLevel } from "@/lib/adaptive";
 import { HttpError, checkAiQuota, getFamily, getProfile, loadSkills, logEvent } from "@/lib/lessons/service";
@@ -32,6 +32,9 @@ export const POST = authed(Body, async ({ db, userId }, body) => {
     theme: body.theme,
     vocabulary: (vocab ?? []).map((v) => v.zh),
     learnerLevel: targetLevel(skills, profile?.difficulty_offset ?? 0),
+  }).catch((error) => {
+    if (error instanceof AiGenerationError) throw new HttpError(502, `Couldn't write a story: ${error.message}`);
+    throw error;
   });
   const { data } = await db
     .from("reading_content")

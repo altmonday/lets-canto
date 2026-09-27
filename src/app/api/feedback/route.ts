@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { authed } from "@/lib/api/handler";
-import { aiConfigured } from "@/lib/ai/claude";
+import { AiGenerationError, aiConfigured } from "@/lib/ai/claude";
 import { generateSpeakingFeedback } from "@/lib/ai/generators";
 import { targetLevel } from "@/lib/adaptive";
 import {
@@ -40,6 +40,9 @@ export const POST = authed(Body, async ({ db, userId }, body) => {
     target: prompt.target,
     attempt: body.attempt,
     learnerLevel: targetLevel(skills, profile?.difficulty_offset ?? 0),
+  }).catch((error) => {
+    if (error instanceof AiGenerationError) throw new HttpError(502, `Feedback isn't available: ${error.message}`);
+    throw error;
   });
 
   await recordEvidence(db, userId, {
