@@ -63,6 +63,14 @@ export const POST = authed(Body, async ({ db, userId }, body) => {
     keepStartMonth: false,
     diagnosticNotes: notes,
   });
+  // Unfinished backup lessons (written without AI) make way for personalised ones.
+  // Completed lessons are never touched.
+  await db
+    .from("lessons")
+    .update({ status: "superseded" })
+    .eq("user_id", userId)
+    .in("status", ["ready", "in_progress"])
+    .like("generator", "fallback%");
   await db.from("learner_profiles").update({ diagnostic_completed_at: new Date().toISOString() }).eq("user_id", userId);
   return { results };
 });
