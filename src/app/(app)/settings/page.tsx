@@ -28,7 +28,7 @@ export default async function SettingsPage() {
         <Link href="/diagnostic" className="text-forest underline">
           Retake the placement quiz
         </Link>
-        <p className="mt-1 text-sm text-muted">Resets your skill estimates from a fresh quiz. Lesson history is kept.</p>
+        <p className="mt-1 text-sm text-muted">Builds a fresh personalised plan from a new quiz. Completed lessons stay in your history; any unfinished backup lesson is replaced.</p>
       </section>
       <section>
         <h2 className="mb-3 text-xl font-extrabold">Account & data</h2>
