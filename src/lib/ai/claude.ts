@@ -18,7 +18,9 @@ export function aiConfigured(): boolean {
 
 let client: Anthropic | null = null;
 function getClient(): Anthropic {
-  client ??= new Anthropic({ maxRetries: 2 });
+  // Organization-level keys (not scoped to a workspace) must name the workspace on every request.
+  const workspace = process.env.ANTHROPIC_WORKSPACE_ID;
+  client ??= new Anthropic({ maxRetries: 2, ...(workspace ? { defaultHeaders: { "anthropic-workspace-id": workspace } } : {}) });
   return client;
 }
 
@@ -40,6 +42,9 @@ export function describeAiError(error: unknown): string {
   if (error instanceof Anthropic.PermissionDeniedError) return `This API key can't use ${MODEL}. Check the key's workspace permissions.`;
   if (error instanceof Anthropic.NotFoundError) return `The model ${MODEL} wasn't found for this API key.`;
   if (error instanceof Anthropic.RateLimitError) return "The Claude API rate limit was reached. Try again in a minute.";
+  if (error instanceof Anthropic.APIError && error.message.includes("anthropic-workspace-id")) {
+    return "This API key isn't scoped to a workspace. Create the key inside a workspace in Claude Platform, or set ANTHROPIC_WORKSPACE_ID in Vercel.";
+  }
   if (error instanceof Anthropic.APIError) {
     const detail = error.message.toLowerCase().includes("credit")
       ? "The Claude Platform account is out of credit. Add credit under Billing."
